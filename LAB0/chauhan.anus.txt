@@ -1,0 +1,10 @@
+Northeastern Username- chauhan.anus@northeastern.edu
+Github username- anushkachauhan-11
+
+ROS installation details-
+- Installed ROS Noetic on Ubuntu 20.04
+
+Git installation details-
+- Installed Git in Ubuntu
+- Sucessfully created a Github repository for the assignment
+
