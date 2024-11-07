@@ -1,0 +1,7 @@
+<launch>
+    <node name="imu_driver" pkg="vn_driver" type="driver.py" output="screen">
+        <param name="port" value="/dev/ttyUSB0"/>
+    </node>
+</launch>
+
+
