@@ -1,83 +1,112 @@
+import datetime
+import rosbag
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import UnivariateSpline
+import numpy as np
+import utm
 
-def load_data_from_csv(csv_file_path):
-    """Load GPS data (easting, northing, altitude, and timestamp) from a CSV file."""
-    df = pd.read_csv(csv_file_path)
-    
-    # Check if the data is empty
-    if df.empty:
-        print(f"Warning: No data found in {csv_file_path}")
-    return df
+def load_rosbag(bag_path, topic):
+    bag = rosbag.Bag(bag_path)
 
-def spline_fit_and_plot(easting, northing, location_type):
-    """Generate spline fit and plot the walking data with spline smoothing."""
-    if len(easting) < 2 or len(northing) < 2:
-        print(f"Warning: Not enough data points for {location_type}. Skipping spline fit.")
-        return
+    data = {'timestamp': [], 'latitude': [], 'longitude': [], 'altitude': [], 'easting': [], 'northing': []}
 
-    spline_easting = UnivariateSpline(range(len(easting)), easting)
-    spline_northing = UnivariateSpline(range(len(northing)), northing)
+    for _, msg, t in bag.read_messages(topics=[topic]):
+        data['timestamp'].append(t.to_sec())
+        data['latitude'].append(msg.latitude)
+        data['longitude'].append(msg.longitude)
+        data['altitude'].append(msg.altitude)
+        
+        # Convert latitude and longitude to UTM
+        utm_coords = utm.from_latlon(msg.latitude, msg.longitude)
+        data['easting'].append(utm_coords[0])
+        data['northing'].append(utm_coords[1])
 
-    # Generate smooth line for comparison
-    smooth_easting = spline_easting(np.linspace(0, len(easting) - 1, 500))
-    smooth_northing = spline_northing(np.linspace(0, len(northing) - 1, 500))
+    bag.close()
 
+    return pd.DataFrame(data)
+
+def analyze_moving_data(open_df, occluded_df):
+    open_df['timestamp'] = pd.to_datetime(open_df['timestamp'], unit='s')
+    occluded_df['timestamp'] = pd.to_datetime(occluded_df['timestamp'], unit='s')
+
+    open_easting = open_df['easting'].to_numpy()
+    open_northing = open_df['northing'].to_numpy()
+    open_altitude = open_df['altitude'].to_numpy()
+
+    occluded_easting = occluded_df['easting'].to_numpy()
+    occluded_northing = occluded_df['northing'].to_numpy()
+    occluded_altitude = occluded_df['altitude'].to_numpy()
+
+    open_timestamps = open_df['timestamp'].values
+    occluded_timestamps = occluded_df['timestamp'].values
+
+    open_start_time = open_timestamps[0]
+    open_time_seconds = (open_timestamps - open_start_time) / np.timedelta64(1, 's')
+
+    occluded_start_time = occluded_timestamps[0]
+    occluded_time_seconds = (occluded_timestamps - occluded_start_time) / np.timedelta64(1, 's')
+
+    # Moving data scatterplot with colors according to the report
     plt.figure()
-    plt.plot(easting, northing, 'o', label=f'{location_type} Walking Data', markersize=2, color='blue')
-    plt.plot(smooth_easting, smooth_northing, color='red', label='Spline Fit')
+    
+    plt.scatter(open_easting, open_northing, c='#FF69B4', label='Open Data', marker='o', edgecolor='black', alpha=0.7)  # Pinkish color for Open Data
+    plt.scatter(occluded_easting, occluded_northing, c='#800080', label='Occluded Data', marker='X', edgecolor='black', alpha=0.7)  # Purple for Occluded Data
+
+    plt.title('Moving Data - Northing vs Easting')
     plt.xlabel('Easting (meters)')
     plt.ylabel('Northing (meters)')
-    plt.title(f'Moving {location_type} Data with Spline Fit')
-    plt.legend()
-    plt.grid()
+    
+    legend = plt.legend()
+    frame = legend.get_frame()
+    frame.set_facecolor('lightyellow')
+    frame.set_edgecolor('black')
+    frame.set_alpha(0.9)
 
-def analyze_moving_data(df, location_type):
-    """Analyze and plot the moving data including spline fit and altitude vs. time."""
-    if df.empty:
-        print(f"Error: No data available for {location_type}.")
-        return
+    print("Scatter plot created")
 
-    easting = df['easting'].to_numpy()
-    northing = df['northing'].to_numpy()
-    altitude = df['altitude'].to_numpy()
-    timestamps = df['timestamp'].values
+    # Best-fit line for open data
+    open_coeffs = np.polyfit(open_easting, open_northing, 1)
+    open_best_fit_line = np.poly1d(open_coeffs)
+    open_error = np.sqrt(np.mean((open_northing - open_best_fit_line(open_easting))**2))
+    print("Error from the best-fit line to the open data:", open_error)
+    plt.plot(open_easting, open_best_fit_line(open_easting), color='#FF4500', label='Open Best-fit Line')  # Orange-Red for Open Best-fit Line
+    
+    # Best-fit line for occluded data
+    occluded_coeffs = np.polyfit(occluded_easting, occluded_northing, 1)
+    occluded_best_fit_line = np.poly1d(occluded_coeffs)
+    occluded_error = np.sqrt(np.mean((occluded_northing - occluded_best_fit_line(occluded_easting))**2))
+    print("Error from the best-fit line to the occluded data:", occluded_error)
+    plt.plot(occluded_easting, occluded_best_fit_line(occluded_easting), color='#006400', label='Occluded Best-fit Line')  # Dark Green for Occluded Best-fit Line
+    
+    legend = plt.legend()
+    frame = legend.get_frame()
+    frame.set_facecolor('lightyellow')
+    frame.set_edgecolor('black')
+    frame.set_alpha(0.9)
 
-    # Calculate time in seconds
-    start_time = timestamps[0]
-    time_seconds = timestamps - start_time
-
-    # Check if there is enough data to plot
-    if len(easting) > 1 and len(northing) > 1:
-        # Moving data scatterplot with spline fit
-        spline_fit_and_plot(easting, northing, location_type)
-    else:
-        print(f"Warning: Not enough valid GPS data for {location_type}. Skipping plot.")
-
-    # Moving data altitude plot
+    # Moving data altitude plot with colors according to the report
     plt.figure()
-    plt.plot(time_seconds, altitude, label=f'{location_type} Walking Data', marker='x', color='red') 
-    plt.title(f'Moving {location_type} Data Altitude vs. Time')
+    
+    for i in range(len(open_time_seconds) - 1):
+        plt.plot(open_time_seconds[i:i+2], open_altitude[i:i+2], color='#FF69B4', marker='o', label='Open Data' if i == 0 else "")  # Pinkish for Open Data
+
+    for i in range(len(occluded_time_seconds) - 1):
+        plt.plot(occluded_time_seconds[i:i+2], occluded_altitude[i:i+2], color='#800080', marker='X', label='Occluded Data' if i == 0 else "")  # Purple for Occluded Data
+
+    plt.title('Moving Data Altitude vs. Time')
     plt.xlabel('Time (seconds)')
     plt.ylabel('Altitude (meters)')
-    plt.legend()
+    
+    legend = plt.legend()
+    frame = legend.get_frame()
+    frame.set_facecolor('lightyellow')
+    frame.set_edgecolor('black')
+    frame.set_alpha(0.9)
     plt.grid()
+    print("Altitude plot created")
 
-    print(f"Analysis for {location_type} completed")
-
-# Main section to load data from two CSV files and analyze them
-open_csv_path = '/home/chauhan-anu/catkin_ws/src/lab2/data/square_open_area.csv'
-occluded_csv_path = '/home/chauhan-anu/catkin_ws/src/lab2/data/square_partially_occluded.csv'
-
-# Load data from CSV files
-open_data_df = load_data_from_csv(open_csv_path)
-occluded_data_df = load_data_from_csv(occluded_csv_path)
-
-# Analyze both datasets
-analyze_moving_data(open_data_df, "Open")
-analyze_moving_data(occluded_data_df, "Occluded")
-
-# Show all plots together
-plt.show()
+if __name__ == '__main__':
+    open_df = load_rosbag('/home/chauhan-anu/catkin_ws/src/lab2git/data/square_open_area.bag', '/gps')
+    occluded_df = load_rosbag('/home/chauhan-anu/catkin_ws/src/lab2git/data/square_partially_occluded.bag', '/gps')
+    analyze_moving_data(open_df, occluded_df)
+    plt.show()
