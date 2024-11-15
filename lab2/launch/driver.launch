@@ -1,5 +1,0 @@
-<launch>
-    <node pkg="gps_driver" name="gps_driver" type="driver.py" output="screen">
-        <param name="port" value="/dev/ttyS1" /> <!-- Replace with your actual port -->
-    </node>
-</launch>

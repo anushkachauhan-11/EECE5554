@@ -1,137 +1,104 @@
+import datetime as dt
 import rosbag
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
+import utm
 
-def extract_data_from_bag(bag_file_path):
-    """Extract GPS data (easting, northing, altitude, and timestamp) from a ROS bag file."""
-    bag = rosbag.Bag(bag_file_path)
-    easting_data = []
-    northing_data = []
-    altitude_data = []
-    timestamps = []
+def extract_rosbag_data(bag_file, topic_name):
+    bag = rosbag.Bag(bag_file)
 
-    for topic, msg, t in bag.read_messages(topics=['/gps/fix']):  # Modify this topic if necessary
-        if hasattr(msg, 'position_covariance'):  # Assuming UTM data is stored in these fields
-            easting_data.append(msg.position_covariance[0])  # Replace with UTM easting
-            northing_data.append(msg.position_covariance[1])  # Replace with UTM northing
-            altitude_data.append(msg.altitude)
-            timestamps.append(t.to_sec())  # Convert timestamp to seconds
+    data_record = {
+        'timestamp': [],
+        'latitude': [],
+        'longitude': [],
+        'altitude': [],
+        'easting': [],
+        'northing': []
+    }
+
+    for _, msg, t in bag.read_messages(topics=[topic_name]):
+        data_record['timestamp'].append(t.to_sec())
+        data_record['latitude'].append(msg.latitude)
+        data_record['longitude'].append(msg.longitude)
+        data_record['altitude'].append(msg.altitude)
+        
+        utm_coords = utm.from_latlon(msg.latitude, msg.longitude)
+        data_record['easting'].append(utm_coords[0])
+        data_record['northing'].append(utm_coords[1])
 
     bag.close()
 
-    # Return as a dataframe to work with your existing code
-    return pd.DataFrame({
-        'easting': easting_data,
-        'northing': northing_data,
-        'altitude': altitude_data,
-        'timestamp': timestamps
-    })
+    return pd.DataFrame(data_record)
 
-# Your original function, unchanged
-def analyze_stationary_positions(open_area_df, occluded_area_df):
-    """Analyzes and visualizes stationary GPS data for open and occluded environments."""
-    # Convert data into arrays
-    open_easting = np.array(open_area_df['easting'])
-    open_northing = np.array(open_area_df['northing'])
-    open_altitude = np.array(open_area_df['altitude'])
-    occluded_easting = np.array(occluded_area_df['easting'])
-    occluded_northing = np.array(occluded_area_df['northing'])
-    occluded_altitude = np.array(occluded_area_df['altitude'])
+def evaluate_stationary_positions(open_data, occluded_data):
+    open_east = np.array(open_data['easting'])
+    open_north = np.array(open_data['northing'])
+    open_alt = np.array(open_data['altitude'])
+    occluded_east = np.array(occluded_data['easting'])
+    occluded_north = np.array(occluded_data['northing'])
+    occluded_alt = np.array(occluded_data['altitude'])
 
-    # Center the data by subtracting the first point
-    open_easting_centered = open_easting - open_easting[0]
-    open_northing_centered = open_northing - open_northing[0]
-    occluded_easting_centered = occluded_easting - occluded_easting[0]
-    occluded_northing_centered = occluded_northing - occluded_northing[0]
+    openoffset_east = open_east[0]
+    openoffset_north = open_north[0]
+    open_east_centered = open_east - openoffset_east
+    open_north_centered = open_north - openoffset_north
+    occludedoffset_east = occluded_east[0]
+    occludedoffset_north = occluded_north[0]
+    occluded_east_centered = occluded_east - occludedoffset_east
+    occluded_north_centered = occluded_north - occludedoffset_north
 
-    # Calculate centroids
-    open_centroid_easting = np.mean(open_easting_centered)
-    open_centroid_northing = np.mean(open_northing_centered)
-    occluded_centroid_easting = np.mean(occluded_easting_centered)
-    occluded_centroid_northing = np.mean(occluded_northing_centered)
+    open_centroid_east = np.mean(open_east_centered)
+    open_centroid_north = np.mean(open_north_centered)
+    occluded_centroid_east = np.mean(occluded_east_centered)
+    occluded_centroid_north = np.mean(occluded_north_centered)
 
-    # Calculate deviations
-    open_deviations_easting = open_easting_centered - open_centroid_easting
-    open_deviations_northing = open_northing_centered - open_centroid_northing
-    occluded_deviations_easting = occluded_easting_centered - occluded_centroid_easting
-    occluded_deviations_northing = occluded_northing_centered - occluded_centroid_northing
+    open_deviations_east = open_east_centered - open_centroid_east
+    open_deviations_north = open_north_centered - open_centroid_north
+    occluded_deviations_east = occluded_east_centered - occluded_centroid_east
+    occluded_deviations_north = occluded_north_centered - occluded_centroid_north
 
-    # Stationary northing vs. easting scatterplots
     plt.figure()
-    plt.scatter(open_deviations_easting, open_deviations_northing, label='Open Area', 
-                marker='o', color='#FFB6C1', alpha=0.7)  # Light Pink
-    plt.scatter(occluded_deviations_easting, occluded_deviations_northing, label='Obstructed Area', 
-                marker='o', color='#FF69B4', alpha=0.7)  # Hot Pink
-    plt.scatter(open_centroid_easting, open_centroid_northing, label='Open Centroid', 
-                marker='x', color='#FF1493', s=100)  # Deep Pink
-    plt.scatter(occluded_centroid_easting, occluded_centroid_northing, label='Occluded Centroid', 
-                marker='x', color='#C71585', s=100)  # Medium Violet Red
-
-    # Annotate centroid values
-    plt.annotate(f"Open Centroid: ({open_centroid_easting:.2f}, {open_centroid_northing:.2f})", 
-                 xy=(2, 0.5), 
-                 xytext=(0, 0), 
-                 textcoords='offset points', 
-                 color='blue')
-    plt.annotate(f"Occluded Centroid: ({occluded_centroid_easting:.2f}, {occluded_centroid_northing:.2f})", 
-                 xy=(3.5, 0.3), 
-                 xytext=(5, -20), 
-                 textcoords='offset points', 
-                 color='green')
-
+    plt.scatter(open_deviations_east, open_deviations_north, label='Open Area', marker='o', color='blue', alpha=0.6)
+    plt.scatter(occluded_deviations_east, occluded_deviations_north, label='Obstructed Area', marker='o', color='red', alpha=0.6)
+    plt.scatter(open_centroid_east, open_centroid_north, label='Open Centroid', marker='x', color='green', s=150)
+    plt.scatter(occluded_centroid_east, occluded_centroid_north, label='Occluded Centroid', marker='x', color='orange', s=150)
     plt.title('Stationary Northing vs. Easting Scatterplots')
     plt.xlabel('Easting (meters)')
     plt.ylabel('Northing (meters)')
     plt.legend()
     plt.grid()
+    plt.xlim([-10, 10])
+    plt.ylim([-10, 10])
 
-    # Stationary altitude vs. time plot
     plt.figure()
-    open_timestamps = np.array(open_area_df['timestamp'])
-    occluded_timestamps = np.array(occluded_area_df['timestamp'])
-
-    plt.plot(open_timestamps, open_altitude, label='Open Area', marker='o', 
-             color='#FFB6C1', alpha=0.7)  # Light Pink
-    plt.plot(occluded_timestamps, occluded_altitude, label='Obstructed Area', marker='o', 
-             color='#FF69B4', alpha=0.7)  # Hot Pink
+    plt.plot(open_data['timestamp'], open_alt, label='Open Area', marker='o', color='blue', alpha=0.6)
+    plt.plot(occluded_data['timestamp'], occluded_alt, label='Obstructed Area', marker='o', color='red', alpha=0.6)
     plt.title('Stationary Altitude vs. Time Plot')
     plt.xlabel('Timestamp (s)')
     plt.ylabel('Altitude (meters)')
     plt.legend()
     plt.grid()
 
-    # Histograms for position distances
-    open_distances = np.sqrt((open_easting_centered - open_centroid_easting)**2 + 
-                             (open_northing_centered - open_centroid_northing)**2)
-    occluded_distances = np.sqrt((occluded_easting_centered - occluded_centroid_easting)**2 + 
-                                  (occluded_northing_centered - occluded_centroid_northing)**2)
+    open_distances = np.sqrt((open_east - open_centroid_east)**2 + (open_north - open_centroid_north)**2)
+    occluded_distances = np.sqrt((occluded_east - occluded_centroid_east)**2 + (occluded_north - occluded_centroid_north)**2)
 
     plt.figure()
-    plt.hist(open_distances, bins=20, alpha=0.8, color='#FF69B4', edgecolor='black', linewidth=1.5)  # Hot Pink
+    plt.hist(open_distances, bins=20, alpha=0.8, color='blue', edgecolor='black', linewidth=1.2)
     plt.title('Histogram of Euclidean Distance from Centroid - Open Area')
     plt.xlabel('Distance (meters)')
     plt.ylabel('Frequency')
-    plt.legend(['Open Area - Distance from Centroid'])
     plt.grid()
 
     plt.figure()
-    plt.hist(occluded_distances, bins=20, alpha=0.8, color='#FFB6C1', edgecolor='black', linewidth=1.5)  # Light Pink
-    plt.title('Histogram for Euclidean Distance from Centroid - Obstructed Area')
+    plt.hist(occluded_distances, bins=20, alpha=0.8, color='red', edgecolor='black', linewidth=1.2)
+    plt.title('Histogram of Euclidean Distance from Centroid - Obstructed Area')
     plt.xlabel('Distance (meters)')
     plt.ylabel('Frequency')
     plt.grid()
 
-# Updated bag file paths
-open_bag_path = '/home/chauhan-anu/catkin_ws/src/lab2/data/stationary _open_area.bag'
-occluded_bag_path = '/home/chauhan-anu/catkin_ws/src/lab2/data/stationary_partially_occluded.bag'
-
-# Extract data from the bag files
-open_area_df = extract_data_from_bag(open_bag_path)
-occluded_area_df = extract_data_from_bag(occluded_bag_path)
-
-# Run your analysis using the dataframes
-analyze_stationary_positions(open_area_df, occluded_area_df)
-
-# Show all plots at once
-plt.show()  # Call plt.show() once at the end to display all plots together
+if __name__ == '__main__':
+    open_area_df = extract_rosbag_data('/home/chauhan-anu/catkin_ws/src/lab2git/data/stationary_open_area.bag', '/gps/fix')
+    occluded_area_df = extract_rosbag_data('/home/chauhan-anu/catkin_ws/src/lab2git/data/stationary_partially_occluded.bag', '/gps/fix')
+    evaluate_stationary_positions(open_area_df, occluded_area_df)
+    plt.show()
